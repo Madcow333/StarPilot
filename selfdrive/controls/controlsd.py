@@ -231,8 +231,8 @@ class Controls:
     cs.upAccelCmd = float(self.LoC.pid.p)
     cs.uiAccelCmd = float(self.LoC.pid.i)
     cs.ufAccelCmd = float(self.LoC.pid.f)
-    cs.forceDecel = bool((self.sm['driverMonitoringState'].awarenessStatus < 0.) or
-                         (self.sm['selfdriveState'].state == State.softDisabling) or self.sm["starpilotCarState"].forceCoast)
+    cs.forceDecel = bool((self.sm['selfdriveState'].state == State.softDisabling) or
+                         self.sm["starpilotCarState"].forceCoast)
 
     lat_tuning = self.CP.lateralTuning.which()
     if self.CP.steerControlType == car.CarParams.SteerControlType.angle:
