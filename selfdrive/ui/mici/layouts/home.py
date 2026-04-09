@@ -8,6 +8,12 @@ from openpilot.system.ui.widgets.label import gui_label, MiciLabel, UnifiedLabel
 from openpilot.system.ui.widgets import Widget
 from openpilot.system.ui.lib.application import gui_app, FontWeight, DEFAULT_TEXT_COLOR, MousePos
 from openpilot.starpilot.common.starpilot_variables import MODELS_PATH
+from openpilot.starpilot.common.experimental_state import (
+  CEStatus,
+  next_manual_ce_status,
+  requested_experimental_mode,
+  sync_manual_ce_state,
+)
 from openpilot.selfdrive.ui.ui_state import ui_state
 from openpilot.system.ui.text import wrap_text
 from openpilot.system.version import training_version, RELEASE_BRANCHES
@@ -130,7 +136,7 @@ class MiciHomeLayout(Widget):
 
   def _update_params(self):
     self._safe_mode = ui_state.params.get_bool("SafeMode")
-    self._experimental_mode = ui_state.params.get_bool("ExperimentalMode") and not self._safe_mode
+    self._experimental_mode = requested_experimental_mode(ui_state.params, ui_state.params_memory)
 
     def _clean_name(value: str) -> str:
       return re.sub(r"[🗺️👀📡]", "", value).replace("(Default)", "").strip()
@@ -218,8 +224,15 @@ class MiciHomeLayout(Widget):
       if time.monotonic() - self._mouse_down_t > 0.5:
         # long gating for experimental mode - only allow toggle if longitudinal control is available
         if ui_state.has_longitudinal_control and not self._safe_mode:
-          self._experimental_mode = not self._experimental_mode
-          ui_state.params.put("ExperimentalMode", self._experimental_mode)
+          if ui_state.params.get_bool("ConditionalExperimental"):
+            current_status = ui_state.params_memory.get_int("CEStatus", default=CEStatus["OFF"])
+            override_value = next_manual_ce_status(current_status, self._experimental_mode)
+            ui_state.params_memory.put_int("CEStatus", override_value)
+            sync_manual_ce_state(ui_state.params, override_value)
+            self._experimental_mode = override_value == CEStatus["USER_OVERRIDDEN"]
+          else:
+            self._experimental_mode = not self._experimental_mode
+            ui_state.params.put_bool("ExperimentalMode", self._experimental_mode)
         self._mouse_down_t = None
         self._did_long_press = True
 

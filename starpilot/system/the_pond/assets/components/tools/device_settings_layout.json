@@ -439,6 +439,14 @@
         "is_parent_toggle": true
       },
       {
+        "key": "PersistExperimentalState",
+        "label": "Persist Experimental State",
+        "description": "Keep your manual Conditional Experimental override through reboots until you manually clear it.",
+        "data_type": "bool",
+        "ui_type": "toggle",
+        "parent_key": "ConditionalExperimental"
+      },
+      {
         "key": "CESpeed",
         "label": "Below",
         "description": "Switch to \"Experimental Mode\" when driving below this speed without a lead to help openpilot handle low-speed situations more smoothly.",

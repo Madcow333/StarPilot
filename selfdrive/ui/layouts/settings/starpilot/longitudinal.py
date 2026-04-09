@@ -15,6 +15,7 @@ from openpilot.starpilot.common.accel_profile import (
   normalize_acceleration_profile,
   normalize_deceleration_profile,
 )
+from openpilot.starpilot.common.experimental_state import sync_persist_experimental_state
 
 
 ACCELERATION_PROFILE_OPTIONS = [
@@ -255,6 +256,15 @@ class StarPilotConditionalExperimentalLayout(StarPilotPanel):
         "color": "#597497",
       },
       {
+        "title": tr_noop("Persist Experimental State"),
+        "desc": tr_noop("Keep your manual Conditional Experimental override through reboots until you manually clear it."),
+        "type": "toggle",
+        "get_state": lambda: self._params.get_bool("PersistExperimentalState"),
+        "set_state": self._set_persist_experimental_state,
+        "color": "#597497",
+        "visible": lambda: self._params.get_bool("ConditionalExperimental"),
+      },
+      {
         "title": tr_noop("Below Speed"),
         "type": "value",
         "get_value": lambda: f"{self._params.get_int('CESpeed')} mph",
@@ -352,6 +362,9 @@ class StarPilotConditionalExperimentalLayout(StarPilotPanel):
       },
     ]
     self._rebuild_grid()
+
+  def _set_persist_experimental_state(self, state: bool):
+    sync_persist_experimental_state(self._params, self._params_memory, state)
 
   def _show_speed_selector(self, key):
     def on_close(res, val):

@@ -70,7 +70,15 @@ void ExperimentalModeButton::paintEvent(QPaintEvent *event) {
 }
 
 void ExperimentalModeButton::showEvent(QShowEvent *event) {
-  experimental_mode = params.getBool("ExperimentalMode");
+  if (params.getBool("ConditionalExperimental")) {
+    int status = params_memory.getInt("CEStatus");
+    if ((status != 1 && status != 2) && params.getBool("PersistExperimentalState")) {
+      status = params.getInt("PersistedCEStatus");
+    }
+    experimental_mode = !params.getBool("SafeMode") && status == 2;
+  } else {
+    experimental_mode = params.getBool("ExperimentalMode") && !params.getBool("SafeMode");
+  }
   mode_icon->setPixmap(experimental_mode ? experimental_pixmap : chill_pixmap);
   mode_label->setText(experimental_mode ? tr("EXPERIMENTAL MODE ON") : tr("CHILL MODE ON"));
 }

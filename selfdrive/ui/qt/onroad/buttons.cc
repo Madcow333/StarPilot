@@ -40,6 +40,7 @@ void ExperimentalButton::changeMode() {
     if (starpilot_toggles.value("conditional_experimental_mode").toBool()) {
       int override_value = (starpilot_scene.conditional_status == 1 || starpilot_scene.conditional_status == 2) ? 0 : experimental_mode ? 1 : 2;
       params_memory.putInt("CEStatus", override_value);
+      params.putInt("PersistedCEStatus", params.getBool("PersistExperimentalState") ? override_value : 0);
     } else {
       params.putBool("ExperimentalMode", !experimental_mode);
     }

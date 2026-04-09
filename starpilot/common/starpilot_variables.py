@@ -206,6 +206,7 @@ EXCLUDED_KEYS = {
   "openpilotMinutes",
   "OverpassRequests",
   "PandaSignatures",
+  "PersistedCEStatus",
   "SpeedLimits",
   "SpeedLimitsFiltered",
   "UpdateFailedCount",

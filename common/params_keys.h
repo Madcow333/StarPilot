@@ -42,6 +42,8 @@ inline static std::unordered_map<std::string, ParamKeyAttributes> keys = {
     {"ExperimentalLongitudinalEnabled", {PERSISTENT, BOOL}},
     {"ExperimentalMode", {PERSISTENT, BOOL}},
     {"ExperimentalModeConfirmed", {PERSISTENT, BOOL}},
+    {"PersistExperimentalState", {PERSISTENT, BOOL, "0", "0", 1}},
+    {"PersistedCEStatus", {PERSISTENT, INT, "0", "0"}},
     {"FirmwareQueryDone", {CLEAR_ON_MANAGER_START | CLEAR_ON_ONROAD_TRANSITION, BOOL}},
     {"ForcePowerDown", {PERSISTENT, BOOL}},
     {"GitBranch", {PERSISTENT, STRING}},

@@ -3,6 +3,8 @@ from openpilot.common.params import Params
 from openpilot.system.ui.lib.application import gui_app, FontWeight, FONT_SCALE
 from openpilot.system.ui.lib.multilang import tr
 from openpilot.system.ui.widgets import Widget
+from openpilot.selfdrive.ui.ui_state import ui_state
+from openpilot.starpilot.common.experimental_state import requested_experimental_mode
 
 
 class ExperimentalModeButton(Widget):
@@ -14,13 +16,13 @@ class ExperimentalModeButton(Widget):
     self.button_height = 125
 
     self.params = Params()
-    self.experimental_mode = self.params.get_bool("ExperimentalMode") and not self.params.get_bool("SafeMode")
+    self.experimental_mode = requested_experimental_mode(self.params, ui_state.params_memory)
 
     self.chill_pixmap = gui_app.texture("icons/couch.png", self.img_width, self.img_width)
     self.experimental_pixmap = gui_app.texture("icons/experimental_grey.png", self.img_width, self.img_width)
 
   def show_event(self):
-    self.experimental_mode = self.params.get_bool("ExperimentalMode") and not self.params.get_bool("SafeMode")
+    self.experimental_mode = requested_experimental_mode(self.params, ui_state.params_memory)
 
   def _get_gradient_colors(self):
     alpha = 0xCC if self.is_pressed else 0xFF

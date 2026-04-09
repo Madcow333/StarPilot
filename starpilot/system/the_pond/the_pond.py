@@ -60,6 +60,7 @@ from openpilot.starpilot.common.maps_catalog import (
   schedule_label,
   schedule_param_value,
 )
+from openpilot.starpilot.common.experimental_state import sync_persist_experimental_state
 from openpilot.starpilot.common.starpilot_utilities import delete_file, get_lock_status, run_cmd
 from openpilot.starpilot.common.starpilot_variables import ACTIVE_THEME_PATH, ERROR_LOGS_PATH, EXCLUDED_KEYS, LEGACY_STARPILOT_PARAM_RENAMES, MAPS_PATH, MODELS_PATH, RESOURCES_REPO, SCREEN_RECORDINGS_PATH, STOCK_THEME_PATH, THEME_SAVE_PATH,\
                                                            default_ev_tuning_enabled, update_starpilot_toggles
@@ -3494,6 +3495,18 @@ def setup(app):
         return jsonify({
           "message": f"Parameter '{key}' updated successfully.",
           "updated": updated,
+        }), 200
+
+      if key == "PersistExperimentalState":
+        enabled = str_val.strip() in ("1", "true", "True")
+        sync_persist_experimental_state(params, params_memory, enabled)
+        update_starpilot_toggles()
+        return jsonify({
+          "message": f"Parameter '{key}' updated successfully.",
+          "updated": {
+            "PersistExperimentalState": enabled,
+            "PersistedCEStatus": params.get_int("PersistedCEStatus", default=0),
+          },
         }), 200
 
       if key == "CarMake":

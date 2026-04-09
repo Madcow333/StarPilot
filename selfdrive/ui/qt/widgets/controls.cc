@@ -139,6 +139,15 @@ void ParamControl::toggleClicked(bool state) {
   if (!confirm || confirmed || !state || do_confirm()) {
     if (store_confirm && state) params.putBool(key + "Confirmed", true);
     params.putBool(key, state);
+    if (key == "PersistExperimentalState") {
+      static Params params_memory{"", true};
+      int persisted_status = 0;
+      if (state) {
+        int current_status = params_memory.getInt("CEStatus");
+        persisted_status = (current_status == 1 || current_status == 2) ? current_status : 0;
+      }
+      params.putInt("PersistedCEStatus", persisted_status);
+    }
     setIcon(state);
   } else {
     toggle.togglePosition();

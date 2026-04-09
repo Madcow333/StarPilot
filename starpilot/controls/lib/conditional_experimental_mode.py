@@ -6,19 +6,12 @@ from openpilot.common.filter_simple import FirstOrderFilter
 from openpilot.common.realtime import DT_MDL
 from openpilot.common.constants import CV
 
-from openpilot.starpilot.common.starpilot_variables import CRUISING_SPEED, THRESHOLD, params_memory
-
-CEStatus = {
-  "OFF": 0,              # Off
-  "USER_DISABLED": 1,    # "Experimental Mode" disabled by user
-  "USER_OVERRIDDEN": 2,  # "Experimental Mode" enabled by user
-  "CURVATURE": 3,        # Road curvature condition
-  "LEAD": 4,             # Slower lead vehicle condition
-  "SIGNAL": 5,           # Turn signal condition
-  "SPEED": 6,            # Speed condition
-  "SPEED_LIMIT": 7,      # Speed limit controller condition
-  "STOP_LIGHT": 8        # Stop light or sign condition
-}
+from openpilot.starpilot.common.experimental_state import (
+  CEStatus,
+  is_manual_ce_status,
+  restore_persisted_ce_state,
+)
+from openpilot.starpilot.common.starpilot_variables import CRUISING_SPEED, THRESHOLD
 
 def interp(x, xp, fp):
   return float(np.interp(x, xp, fp))
@@ -66,6 +59,8 @@ class ConditionalExperimentalMode:
 
   def __init__(self, StarPilotPlanner):
     self.starpilot_planner = StarPilotPlanner
+    self.params = self.starpilot_planner.params
+    self.params_memory = self.starpilot_planner.params_memory
 
     # Faster filters with hysteresis for better responsiveness
     self.curvature_filter = FirstOrderFilter(0, self.FILTER_TIME_CURVE, DT_MDL)
@@ -83,12 +78,9 @@ class ConditionalExperimentalMode:
   def update(self, v_ego, sm, starpilot_toggles):
     now = time.monotonic()
 
-    if starpilot_toggles.experimental_mode_via_press:
-      self.status_value = params_memory.get_int("CEStatus")
-    else:
-      self.status_value = CEStatus["OFF"]
+    self.status_value = CEStatus["OFF"] if self.params.get_bool("SafeMode") else restore_persisted_ce_state(self.params, self.params_memory)
 
-    if self.status_value not in (CEStatus["USER_DISABLED"], CEStatus["USER_OVERRIDDEN"]) and not sm["carState"].standstill:
+    if not is_manual_ce_status(self.status_value) and not sm["carState"].standstill:
       self.update_conditions(v_ego, sm, starpilot_toggles)
 
       triggered = self.check_conditions(v_ego, sm, starpilot_toggles)
@@ -103,13 +95,13 @@ class ConditionalExperimentalMode:
 
       self.experimental_mode = triggered or hold_active or transition_buffer_active
       self.prev_experimental_mode = self.experimental_mode
-      params_memory.put_int("CEStatus", self.status_value if self.experimental_mode else CEStatus["OFF"])
+      self.params_memory.put_int("CEStatus", self.status_value if self.experimental_mode else CEStatus["OFF"])
     else:
       self.mode_hold_until = 0.0
       self.mode_false_since = 0.0
       self.experimental_mode = (self.status_value == CEStatus["USER_OVERRIDDEN"] or
                                 (sm["carState"].standstill and self.experimental_mode and self.starpilot_planner.model_stopped))
-      self.stop_light_detected &= self.status_value not in (CEStatus["USER_DISABLED"], CEStatus["USER_OVERRIDDEN"])
+      self.stop_light_detected &= not is_manual_ce_status(self.status_value)
       self.stop_light_filter.x = 0
 
   def check_conditions(self, v_ego, sm, starpilot_toggles):

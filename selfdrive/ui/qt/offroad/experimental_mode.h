@@ -18,6 +18,7 @@ private:
   void showEvent(QShowEvent *event) override;
 
   Params params;
+  Params params_memory{"", true};
   bool experimental_mode;
   int img_width = 100;
   int horizontal_padding = 30;
