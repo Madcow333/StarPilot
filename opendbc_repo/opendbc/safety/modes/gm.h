@@ -596,6 +596,12 @@ static safety_config gm_init(uint16_t param) {
                                           {0x1E1, 0, 7, .check_relay = false},
                                           {0xBD, 0, 7, .check_relay = false}, {0x1F5, 0, 8, .check_relay = false}};  // pt bus
 
+  static const CanMsg GM_SDGM_TX_MSGS[] = {{0x180, 0, 4, .check_relay = true}, {0x370, 0, 6, .check_relay = false}, {0x3D1, 0, 8, .check_relay = false},  // pt bus
+                                           {0x1E1, 2, 7, .check_relay = false}, {0x184, 2, 8, .check_relay = false},  // camera bus
+                                           {0x200, 0, 6, .check_relay = false},
+                                           {0x1E1, 0, 7, .check_relay = false},
+                                           {0xBD, 0, 7, .check_relay = false}, {0x1F5, 0, 8, .check_relay = false}};  // pt bus
+
   static const CanMsg GM_CAM_NO_CAMERA_TX_MSGS[] = {{0x180, 0, 4, .check_relay = false}, {0x370, 0, 6, .check_relay = false}, {0x3D1, 0, 8, .check_relay = false},  // pt bus
                                                     {0x1E1, 2, 7, .check_relay = false}, {0x184, 2, 8, .check_relay = false},  // camera bus
                                                     {0x200, 0, 6, .check_relay = false},
@@ -695,8 +701,11 @@ static safety_config gm_init(uint16_t param) {
   }
 
   safety_config ret;
+  const bool gm_sdgm_stock = gm_sdgm && !gm_cc_long && !gm_cam_long && !gm_no_camera;
   // SDGM behaves like a forwarding camera path for whitelist/forwarding purposes.
-  if ((gm_hw == GM_CAM) || gm_sdgm) {
+  if (gm_sdgm_stock) {
+    ret = BUILD_SAFETY_CFG(gm_rx_checks, GM_SDGM_TX_MSGS);
+  } else if ((gm_hw == GM_CAM) || gm_sdgm) {
     // FIXME: cppcheck thinks that gm_cam_long is always false. This is not true
     // if ALLOW_DEBUG is defined but cppcheck is run without ALLOW_DEBUG
     // cppcheck-suppress knownConditionTrueFalse
