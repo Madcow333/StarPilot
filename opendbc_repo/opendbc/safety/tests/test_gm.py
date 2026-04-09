@@ -237,6 +237,7 @@ class TestGmSdgmSafety(TestGmSafetyBase):
   TX_MSGS = [[0x180, 0], [0x370, 0], [0x200, 0], [0x1E1, 0], [0x3D1, 0], [0xBD, 0], [0x1F5, 0],  # pt bus
              [0x1E1, 2], [0x184, 2]]  # camera bus
   FWD_BLACKLISTED_ADDRS = {2: [0x180], 0: [0x184]}  # block LKAS message and PSCMStatus
+  RELAY_MALFUNCTION_ADDRS = {0: (0x180,), 2: ()}
   BUTTONS_BUS = 2  # tx only
 
   def setUp(self):
