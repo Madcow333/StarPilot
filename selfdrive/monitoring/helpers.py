@@ -1,5 +1,6 @@
 from openpilot.selfdrive.monitoring.policy import DRIVER_MONITOR_SETTINGS, DriverMonitoring, face_orientation_from_model
 
+# Driver monitoring alerts are disabled on this fork (see policy.DriverMonitoring._update_events).
 
 def face_orientation_from_net(angles_desc, pos_desc, rpy_calib):
   pitch, yaw = face_orientation_from_model(angles_desc, pos_desc, rpy_calib)

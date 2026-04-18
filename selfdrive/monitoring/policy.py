@@ -331,6 +331,9 @@ class DriverMonitoring:
       self.hi_stds = 0
 
   def _update_events(self, driver_engaged, op_engaged, lowspeed, wrong_gear):
+    # Driver monitoring alerts are disabled on this fork.
+    self._reset_awareness()
+    return
     self.alert_level = AlertLevel.none
     self.driver_interacting = driver_engaged
 

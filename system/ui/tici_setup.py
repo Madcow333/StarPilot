@@ -30,7 +30,8 @@ BODY_FONT_SIZE = 80
 BUTTON_HEIGHT = 160
 BUTTON_SPACING = 50
 
-OPENPILOT_URL = "https://openpilot.comma.ai"
+NETWORK_CHECK_URL = "https://openpilot.comma.ai"
+DEFAULT_INSTALLER_URL = "https://installer.comma.ai/Madcow333/StarPilot"
 USER_AGENT = f"AGNOSSetup-{HARDWARE.get_os_version()}"
 
 INSTALLER_DESTINATION_PATH = "/tmp/installer"
@@ -178,7 +179,7 @@ class Setup(Widget):
   def _network_setup_continue_button_callback(self):
     self.stop_network_check_thread.set()
     if self._software_selection_openpilot_button.selected:
-      self.download(OPENPILOT_URL)
+      self.download(DEFAULT_INSTALLER_URL)
     else:
       self.state = SetupState.CUSTOM_SOFTWARE
 
@@ -207,7 +208,7 @@ class Setup(Widget):
     while not self.stop_network_check_thread.is_set():
       if self.state == SetupState.NETWORK_SETUP:
         try:
-          urllib.request.urlopen(OPENPILOT_URL, timeout=2.0)
+          urllib.request.urlopen(NETWORK_CHECK_URL, timeout=2.0)
           self.network_connected.set()
           if HARDWARE.get_network_type() == NetworkType.wifi:
             self.wifi_connected.set()
