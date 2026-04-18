@@ -410,7 +410,14 @@ def wait_for_no_driver(params, sm, door_checks=False, time_threshold=60):
   can_parser = CANParser("toyota_nodsu_pt_generated", [("BODY_CONTROL_STATE", 3)], bus=0)
   can_sock = messaging.sub_sock("can", timeout=100)
 
-  while sm["deviceState"].screenBrightnessPercent != 0 or any(proc.name == "dmonitoringd" and proc.running for proc in sm["managerState"].processes):
+  def dmonitoring_running() -> bool:
+    return any(proc.name == "dmonitoringd" and proc.running for proc in sm["managerState"].processes)
+
+  def dmonitoring_expected() -> bool:
+    # DMS is disabled on this fork; dmonitoringd is not expected to run.
+    return False
+
+  while sm["deviceState"].screenBrightnessPercent != 0 or dmonitoring_running():
     sm.update()
 
     if any(ps.ignitionLine or ps.ignitionCan for ps in sm["pandaStates"] if ps.pandaType != log.PandaState.PandaType.unknown):
@@ -420,10 +427,12 @@ def wait_for_no_driver(params, sm, door_checks=False, time_threshold=60):
 
   params.put_bool("IsDriverViewEnabled", True)
 
-  while not any(proc.name == "dmonitoringd" and proc.running for proc in sm["managerState"].processes):
+  while dmonitoring_expected() and not dmonitoring_running():
     sm.update()
 
     time.sleep(DT_HW)
+
+  use_driver_monitoring = dmonitoring_expected()
 
   start_time = time.monotonic()
   while True:
@@ -436,7 +445,7 @@ def wait_for_no_driver(params, sm, door_checks=False, time_threshold=60):
     if any(ps.ignitionLine or ps.ignitionCan for ps in sm["pandaStates"] if ps.pandaType != log.PandaState.PandaType.unknown):
       break
 
-    if sm["driverMonitoringState"].visionPolicyState.faceDetected or not sm.alive["driverMonitoringState"]:
+    if use_driver_monitoring and (sm["driverMonitoringState"].faceDetected or not sm.alive["driverMonitoringState"]):
       start_time = time.monotonic()
 
     if door_checks:
