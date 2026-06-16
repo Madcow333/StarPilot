@@ -541,6 +541,17 @@ if [ -d __DEVICE_PATH__ ]; then
 fi
 mv __TMP_PATH__ __DEVICE_PATH__
 
+# Align AGNOS startup gate with the OS already on this comma.
+if [ -r /VERSION ]; then
+  device_agnos="$(tr -d '\n\r' < /VERSION)"
+  for launch_env in __DEVICE_PATH__/launch_env.sh __DEVICE_PATH__/sunnypilot/system/hardware/c3/launch_env.sh; do
+    [ -f "$launch_env" ] || continue
+    if grep -q 'export AGNOS_VERSION=' "$launch_env"; then
+      sed -i "s/export AGNOS_VERSION=\"[^\"]*\"/export AGNOS_VERSION=\"${device_agnos}\"/" "$launch_env"
+    fi
+  done
+fi
+
 mkdir -p /data/params/d
 printf '%s' '__INSTALLER_BRANCH__' > /data/params/d/UpdaterTargetBranch
 printf '%s' 'idle' > /data/params/d/UpdaterState
