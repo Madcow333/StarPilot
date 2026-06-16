@@ -20,8 +20,13 @@ fi
 # headroom for this until ui is moved to the CPU.
 export QCOM_PRIORITY=12
 
+# Prefer the OS already on this comma so fork installs do not force the AGNOS updater on boot.
 if [ -z "$AGNOS_VERSION" ]; then
-  export AGNOS_VERSION="19.6.20"
+  if [ -r /VERSION ]; then
+    export AGNOS_VERSION="$(tr -d '\n\r' < /VERSION)"
+  else
+    export AGNOS_VERSION="19.6.20"
+  fi
 fi
 
 if [ -z "$AGNOS_ACCEPTED_VERSIONS" ]; then
