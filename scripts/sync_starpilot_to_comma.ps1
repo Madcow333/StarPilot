@@ -6,7 +6,7 @@ param(
   [string]$InstallerRepo = "https://github.com/Madcow333/openpilot.git",
   [string]$InstallerBranch = "StarPilot",
   [string]$InstallerRemote = "installer",
-  [string]$AdbPath = "C:\platform-tools\adb.exe",
+  [string]$AdbPath = "",
   [string]$DevicePath = "/data/openpilot",
   [string]$BackupPath = "/data/openpilot.backup.previous",
   [string]$ContinuePath = "/data/continue.sh",
@@ -350,8 +350,26 @@ print(f"{len(Panda.list())},{len(PandaDFU.list())}")
   }
 }
 
-if (-not (Test-Path -LiteralPath $AdbPath)) {
-  throw "ADB not found at $AdbPath"
+if (-not $AdbPath -or -not (Test-Path -LiteralPath $AdbPath)) {
+  $adbCandidates = @(
+    (Join-Path (Split-Path -Parent (Split-Path -Parent $PSScriptRoot)) "tools\platform-tools\adb.exe"),
+    "C:\platform-tools\adb.exe"
+  )
+  foreach ($candidate in $adbCandidates) {
+    if ($candidate -and (Test-Path -LiteralPath $candidate)) {
+      $AdbPath = (Resolve-Path -LiteralPath $candidate).Path
+      break
+    }
+  }
+  if (-not $AdbPath -or -not (Test-Path -LiteralPath $AdbPath)) {
+    $adbCommand = Get-Command adb -ErrorAction SilentlyContinue
+    if ($adbCommand) {
+      $AdbPath = $adbCommand.Source
+    }
+  }
+}
+if (-not $AdbPath -or -not (Test-Path -LiteralPath $AdbPath)) {
+  throw "ADB not found. Pass -AdbPath, run Fork_Manager.bat setup adb, or put adb.exe on PATH."
 }
 
 if ($CheckAdbOnly) {
