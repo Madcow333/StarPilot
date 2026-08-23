@@ -24,6 +24,8 @@ param(
   [switch]$KeepBundle,
   [int]$AdbCommandTimeoutSeconds = 90,
   [int]$AdbPushTimeoutSeconds = 600,
+  [int]$AdbChunkTimeoutSeconds = 180,
+  [int]$AdbChunkSizeMiB = 128,
   [int]$AdbInstallTimeoutSeconds = 600,
   [int]$AdbRestartTimeoutSeconds = 60,
   [int]$AdbProbeTimeoutSeconds = 15
@@ -186,6 +188,107 @@ function Get-AdbOutput {
 
   $result = Invoke-AdbProcess -Arguments $Arguments -TimeoutSeconds $TimeoutSeconds
   return $result.Stdout.Trim()
+}
+
+function Get-DeviceFileSize {
+  param(
+    [Parameter(Mandatory = $true)]
+    [string]$RemotePath
+  )
+
+  $command = "stat -c %s '$RemotePath' 2>/dev/null || echo 0"
+  $output = (Get-AdbOutput -Arguments @("shell", "sh", "-c", $command) -TimeoutSeconds $AdbProbeTimeoutSeconds).Trim()
+  [long]$size = 0
+  if (-not [long]::TryParse(($output -split "\r?\n")[-1], [ref]$size)) {
+    throw "Could not parse device file size for $RemotePath`: $output"
+  }
+  return $size
+}
+
+function Push-AdbFileChunked {
+  param(
+    [Parameter(Mandatory = $true)]
+    [string]$LocalPath,
+    [Parameter(Mandatory = $true)]
+    [string]$RemotePath,
+    [Parameter(Mandatory = $true)]
+    [string]$ResumeKey
+  )
+
+  $file = Get-Item -LiteralPath $LocalPath
+  $chunkSize = [long]$AdbChunkSizeMiB * 1MB
+  if ($chunkSize -le 0) {
+    throw "AdbChunkSizeMiB must be greater than zero"
+  }
+
+  if ($file.Length -le $chunkSize) {
+    Invoke-Adb -Arguments @("push", $LocalPath, $RemotePath) -TimeoutSeconds $AdbPushTimeoutSeconds
+    return
+  }
+
+  $remotePartsPath = "$RemotePath.parts-$ResumeKey"
+  $localPartsPath = Join-Path $file.DirectoryName "$($file.Name).parts-$ResumeKey"
+  New-Item -ItemType Directory -Path $localPartsPath -Force | Out-Null
+  Invoke-Adb -Arguments @("shell", "mkdir", "-p", $remotePartsPath) -TimeoutSeconds $AdbCommandTimeoutSeconds
+
+  $inputStream = [System.IO.File]::OpenRead($file.FullName)
+  $buffer = New-Object byte[] (4MB)
+  $partIndex = 0
+  try {
+    while ($inputStream.Position -lt $inputStream.Length) {
+      $partLength = [Math]::Min($chunkSize, $inputStream.Length - $inputStream.Position)
+      $partName = "part-{0:D5}" -f $partIndex
+      $localPartPath = Join-Path $localPartsPath $partName
+      $remotePartPath = "$remotePartsPath/$partName"
+      $remotePartLength = Get-DeviceFileSize -RemotePath $remotePartPath
+
+      if ($remotePartLength -eq $partLength) {
+        Write-Host "Reusing verified device chunk $partName ($partLength bytes)"
+        [void]$inputStream.Seek($partLength, [System.IO.SeekOrigin]::Current)
+      } else {
+        $outputStream = $null
+        try {
+          $outputStream = [System.IO.File]::Create($localPartPath)
+          [long]$remaining = $partLength
+          while ($remaining -gt 0) {
+            $toRead = [int][Math]::Min($buffer.Length, $remaining)
+            $read = $inputStream.Read($buffer, 0, $toRead)
+            if ($read -le 0) {
+              throw "Unexpected end of file while creating $partName"
+            }
+            $outputStream.Write($buffer, 0, $read)
+            $remaining -= $read
+          }
+        } finally {
+          if ($null -ne $outputStream) {
+            $outputStream.Dispose()
+          }
+        }
+
+        Write-Host "Pushing chunk $($partIndex + 1) of $([Math]::Ceiling($file.Length / $chunkSize)) ($partLength bytes)"
+        Invoke-Adb -Arguments @("push", $localPartPath, $remotePartPath) -TimeoutSeconds $AdbChunkTimeoutSeconds
+        $remotePartLength = Get-DeviceFileSize -RemotePath $remotePartPath
+        if ($remotePartLength -ne $partLength) {
+          throw "Device chunk $partName has $remotePartLength bytes; expected $partLength"
+        }
+        Remove-Item -LiteralPath $localPartPath -Force
+      }
+
+      $partIndex += 1
+    }
+  } finally {
+    $inputStream.Dispose()
+    Remove-Item -LiteralPath $localPartsPath -Recurse -Force -ErrorAction SilentlyContinue
+  }
+
+  Write-Host "Reassembling $partIndex verified chunks on the device"
+  $assembleCommand = "rm -f '$RemotePath' && cat '$remotePartsPath'/part-* > '$RemotePath'"
+  Invoke-Adb -Arguments @("shell", "sh", "-c", $assembleCommand) -TimeoutSeconds $AdbPushTimeoutSeconds
+  $remoteLength = Get-DeviceFileSize -RemotePath $RemotePath
+  if ($remoteLength -ne $file.Length) {
+    throw "Reassembled device file has $remoteLength bytes; expected $($file.Length)"
+  }
+  Invoke-Adb -Arguments @("shell", "rm", "-rf", $remotePartsPath) -TimeoutSeconds $AdbCommandTimeoutSeconds
 }
 
 function Request-DeviceReboot {
@@ -715,7 +818,7 @@ sync
   [System.IO.File]::WriteAllText($localInstallScriptPath, $deviceInstallScript, [System.Text.UTF8Encoding]::new($false))
 
   Write-Step "Pushing bundle and install script over adb"
-  Invoke-Adb -Arguments @("push", $bundlePath, $DeviceBundlePath) -TimeoutSeconds $AdbPushTimeoutSeconds
+  Push-AdbFileChunked -LocalPath $bundlePath -RemotePath $DeviceBundlePath -ResumeKey $headCommitShort
   Invoke-Adb -Arguments @("push", $localInstallScriptPath, $DeviceScriptPath) -TimeoutSeconds $AdbPushTimeoutSeconds
 
   Write-Step "Installing committed local repo to the device"
