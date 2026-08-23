@@ -800,11 +800,46 @@ if [ -r /VERSION ]; then
   done
 fi
 
-mkdir -p /data/params/d
-printf '%s' '__INSTALLER_BRANCH__' > /data/params/d/UpdaterTargetBranch
-printf '%s' 'idle' > /data/params/d/UpdaterState
-rm -f /data/params/d/UpdaterNewDescription /data/params/d/UpdaterNewReleaseNotes /data/params/d/LastUpdateException
-chown comma:comma /data/params/d/UpdaterTargetBranch /data/params/d/UpdaterState 2>/dev/null || true
+params_dir=/data/params/d
+mkdir -p "$params_dir"
+now="$(date -u '+%Y-%m-%dT%H:%M:%S')"
+last_uptime_onroad="$(cat "$params_dir/UptimeOnroad" 2>/dev/null || printf '0.0')"
+last_route_count="$(cat "$params_dir/RouteCount" 2>/dev/null || printf '0')"
+
+# Fork Manager owns updates for this install; keep startup independent of an
+# internet check and record this local deployment as the current update.
+printf '%s' '__INSTALLER_BRANCH__' > "$params_dir/UpdaterTargetBranch"
+printf '%s' '1' > "$params_dir/DisableUpdates"
+printf '%s' "$now" > "$params_dir/LastUpdateTime"
+printf '%s' "$now" > "$params_dir/UpdaterLastFetchTime"
+printf '%s' "$last_uptime_onroad" > "$params_dir/LastUpdateUptimeOnroad"
+printf '%s' "$last_route_count" > "$params_dir/LastUpdateRouteCount"
+printf '%s' '0' > "$params_dir/UpdateFailedCount"
+printf '%s' 'idle' > "$params_dir/UpdaterState"
+
+rm -f \
+  "$params_dir/UpdateAvailable" \
+  "$params_dir/Updated" \
+  "$params_dir/UpdaterAvailableBranches" \
+  "$params_dir/UpdaterCurrentDescription" \
+  "$params_dir/UpdaterCurrentReleaseNotes" \
+  "$params_dir/UpdaterFetchAvailable" \
+  "$params_dir/UpdaterNewDescription" \
+  "$params_dir/UpdaterNewReleaseNotes" \
+  "$params_dir/LastUpdateException" \
+  "$params_dir/Offroad_ConnectivityNeeded" \
+  "$params_dir/Offroad_ConnectivityNeededPrompt" \
+  "$params_dir/Offroad_UpdateFailed"
+
+chown comma:comma \
+  "$params_dir/UpdaterTargetBranch" \
+  "$params_dir/DisableUpdates" \
+  "$params_dir/LastUpdateTime" \
+  "$params_dir/UpdaterLastFetchTime" \
+  "$params_dir/LastUpdateUptimeOnroad" \
+  "$params_dir/LastUpdateRouteCount" \
+  "$params_dir/UpdateFailedCount" \
+  "$params_dir/UpdaterState" 2>/dev/null || true
 
 cat >__CONTINUE_PATH__ <<'EOF'
 #!/usr/bin/env bash
