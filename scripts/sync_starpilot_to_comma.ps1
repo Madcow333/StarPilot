@@ -197,7 +197,7 @@ function Get-DeviceFileSize {
   )
 
   $command = "stat -c %s '$RemotePath' 2>/dev/null || echo 0"
-  $output = (Get-AdbOutput -Arguments @("shell", "sh", "-c", $command) -TimeoutSeconds $AdbProbeTimeoutSeconds).Trim()
+  $output = (Get-AdbOutput -Arguments @("shell", $command) -TimeoutSeconds $AdbProbeTimeoutSeconds).Trim()
   [long]$size = 0
   if (-not [long]::TryParse(($output -split "\r?\n")[-1], [ref]$size)) {
     throw "Could not parse device file size for $RemotePath`: $output"
@@ -307,7 +307,7 @@ function Push-AdbFileChunked {
 
   Write-Host "Reassembling $partIndex verified chunks on the device"
   $assembleCommand = "rm -f '$RemotePath' && cat '$remotePartsPath'/part-* > '$RemotePath'"
-  Invoke-Adb -Arguments @("shell", "sh", "-c", $assembleCommand) -TimeoutSeconds $AdbPushTimeoutSeconds
+  Invoke-Adb -Arguments @("shell", $assembleCommand) -TimeoutSeconds $AdbPushTimeoutSeconds
   $remoteLength = Wait-ForDeviceFileSize -RemotePath $RemotePath -ExpectedSize $file.Length
   if ($remoteLength -ne $file.Length) {
     throw "Reassembled device file has $remoteLength bytes; expected $($file.Length)"
@@ -398,7 +398,7 @@ function Wait-ForDeviceReady {
     }
 
     try {
-      $launchScriptReady = (Get-AdbOutput -Arguments @("shell", "sh", "-c", "test -x $DevicePath/launch_openpilot.sh && echo ready") -TimeoutSeconds $AdbProbeTimeoutSeconds).Trim()
+      $launchScriptReady = (Get-AdbOutput -Arguments @("shell", "test -x $DevicePath/launch_openpilot.sh && echo ready") -TimeoutSeconds $AdbProbeTimeoutSeconds).Trim()
       if ($launchScriptReady -eq "ready") {
         return
       }
@@ -441,7 +441,7 @@ function Invoke-StarPilotDeviceHarden {
   Invoke-Adb -Arguments @("push", $hostHarden, $remoteHarden) -TimeoutSeconds $AdbPushTimeoutSeconds
   $clearFlag = if ($ClearMsgq) { "1" } else { "0" }
   $cmd = "chmod +x $remoteHarden; DEVICE_PATH=$DevicePath CLEAR_MSGQ=$clearFlag bash $remoteHarden"
-  Invoke-Adb -Arguments @("shell", "sh", "-c", $cmd) -TimeoutSeconds $AdbInstallTimeoutSeconds
+  Invoke-Adb -Arguments @("shell", $cmd) -TimeoutSeconds $AdbInstallTimeoutSeconds
 }
 
 function Start-InstalledSoftware {
@@ -471,7 +471,7 @@ sudo -u comma bash -lc 'cd __DEVICE_PATH__ && nohup ./launch_openpilot.sh >/tmp/
 
   $deviceStartScript = $deviceStartScript.Replace("__DEVICE_PATH__", $DevicePath)
   $deviceStartScript = $deviceStartScript.Replace("`r`n", "`n")
-  Invoke-Adb -Arguments @("shell", "sh", "-c", $deviceStartScript) -TimeoutSeconds $AdbRestartTimeoutSeconds
+  Invoke-Adb -Arguments @("shell", $deviceStartScript) -TimeoutSeconds $AdbRestartTimeoutSeconds
 }
 
 function Wait-ForSoftwareReady {
@@ -482,7 +482,7 @@ function Wait-ForSoftwareReady {
     Start-Sleep -Seconds 5
 
     try {
-      $procSummary = Get-AdbOutput -Arguments @("shell", "sh", "-c", "pgrep -af 'manager.py|build.py|spinner.py|text.py|selfdrive.ui.ui|selfdrive.pandad.pandad|./pandad' || true") -TimeoutSeconds $AdbProbeTimeoutSeconds
+      $procSummary = Get-AdbOutput -Arguments @("shell", "pgrep -af 'manager.py|build.py|spinner.py|text.py|selfdrive.ui.ui|selfdrive.pandad.pandad|./pandad' || true") -TimeoutSeconds $AdbProbeTimeoutSeconds
     } catch {
       continue
     }
@@ -513,7 +513,7 @@ print(f"{len(Panda.list())},{len(PandaDFU.list())}")
   try {
     [System.IO.File]::WriteAllText($localProbePath, $probe, [System.Text.UTF8Encoding]::new($false))
     Invoke-Adb -Arguments @("push", $localProbePath, $remoteProbePath) -TimeoutSeconds $AdbPushTimeoutSeconds
-    $output = Get-AdbOutput -Arguments @("shell", "sh", "-c", "cd /data/openpilot && PYTHONPATH=/data/openpilot /usr/local/venv/bin/python3 $remoteProbePath") -TimeoutSeconds $AdbCommandTimeoutSeconds
+    $output = Get-AdbOutput -Arguments @("shell", "cd /data/openpilot && PYTHONPATH=/data/openpilot /usr/local/venv/bin/python3 $remoteProbePath") -TimeoutSeconds $AdbCommandTimeoutSeconds
   } finally {
     Remove-Item -LiteralPath $localProbePath -Force -ErrorAction SilentlyContinue
     try {
