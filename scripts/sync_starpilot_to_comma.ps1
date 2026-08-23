@@ -212,6 +212,7 @@ function Wait-ForAdbDevice {
   param([int]$TimeoutSeconds = 90)
 
   $deadline = (Get-Date).AddSeconds($TimeoutSeconds)
+  $resetAttempted = $false
   while ((Get-Date) -lt $deadline) {
     try {
       $devices = Get-AdbOutput -Arguments @("devices") -TimeoutSeconds $AdbProbeTimeoutSeconds
@@ -220,9 +221,16 @@ function Wait-ForAdbDevice {
           Where-Object { $_ -match "^\S+\s+device$" }
       )
       if ($onlineDevices.Count -gt 0) {
+        if (Get-Command Reset-AdbDaemon -ErrorAction SilentlyContinue) {
+          Reset-AdbDaemon -AdbPath $AdbPath
+        }
         return
       }
     } catch {
+      if (-not $resetAttempted -and (Get-Command Reset-AdbDaemon -ErrorAction SilentlyContinue)) {
+        $resetAttempted = $true
+        try { Reset-AdbDaemon -AdbPath $AdbPath } catch { }
+      }
     }
 
     Start-Sleep -Seconds 2
@@ -279,15 +287,63 @@ If that happens, disconnect the USB data cable, boot the comma on power only, th
 "@
 }
 
+function Invoke-StarPilotDeviceHarden {
+  param(
+    [switch]$ClearMsgq
+  )
+
+  # Prefer the host-managed harden script so deploys always get latest fixes,
+  # even if the installed branch is older than Fork Manager.
+  $hostHarden = Join-Path $PSScriptRoot "starpilot_device_harden.sh"
+  if (-not (Test-Path -LiteralPath $hostHarden)) {
+    $hostHarden = Join-Path (Split-Path -Parent $PSScriptRoot) "..\scripts\starpilot_device_harden.sh"
+    $hostHarden = [System.IO.Path]::GetFullPath($hostHarden)
+  }
+  if (-not (Test-Path -LiteralPath $hostHarden)) {
+    # Fall back to in-tree path relative to this repo when script lives under StarPilot/scripts
+    $hostHarden = Join-Path $PSScriptRoot "starpilot_device_harden.sh"
+  }
+
+  if (-not (Test-Path -LiteralPath $hostHarden)) {
+    Write-Warning "starpilot_device_harden.sh not found next to deploy script; skipping device harden."
+    return
+  }
+
+  $remoteHarden = "/data/starpilot_device_harden.sh"
+  Write-Step "Hardening StarPilot on device (capnp libs, +x bins, msgq, pandad)"
+  Invoke-Adb -Arguments @("push", $hostHarden, $remoteHarden) -TimeoutSeconds $AdbPushTimeoutSeconds
+  $clearFlag = if ($ClearMsgq) { "1" } else { "0" }
+  $cmd = "chmod +x $remoteHarden; DEVICE_PATH=$DevicePath CLEAR_MSGQ=$clearFlag bash $remoteHarden"
+  Invoke-Adb -Arguments @("shell", "sh", "-c", $cmd) -TimeoutSeconds $AdbInstallTimeoutSeconds
+}
+
 function Start-InstalledSoftware {
+  # Stop openpilot, clear stale msgq (fork switches corrupt deviceState), re-harden, start.
   $deviceStartScript = @'
 set -e
-pkill -9 -f 'launch_chffrplus.sh|system/manager/manager.py|./manager.py|system.updated.updated|selfdrive.pandad.pandad|./pandad|selfdrive.ui.ui|system/ui/text.py|spinner.py|build.py|starpilot\.|the_pond|device_syncd|mapd_wrapper|starpilot_process|galaxy' || true
+pkill -9 -f 'launch_chffrplus.sh|system/manager/manager.py|./manager.py|system.updated.updated|selfdrive.pandad.pandad|./pandad|selfdrive.ui.ui|system/ui/text.py|spinner.py|build.py|starpilot\.|the_pond|device_syncd|mapd_wrapper|starpilot_process|galaxy|system\.hardware|camerad|modeld' || true
+sleep 1
+# Stale /dev/shm/msgq_* after fork switch leaves UI on "start the car" with ignition on.
+rm -f /dev/shm/msgq_*
+if [ -x /data/starpilot_device_harden.sh ]; then
+  DEVICE_PATH=__DEVICE_PATH__ CLEAR_MSGQ=0 bash /data/starpilot_device_harden.sh || true
+elif [ -x __DEVICE_PATH__/scripts/starpilot_device_harden.sh ]; then
+  DEVICE_PATH=__DEVICE_PATH__ CLEAR_MSGQ=0 bash __DEVICE_PATH__/scripts/starpilot_device_harden.sh || true
+fi
 rm -f /tmp/fork-switch-launch.log
+# Prefer systemd comma.service when present (sets up tmux + env correctly).
+if systemctl list-unit-files comma.service >/dev/null 2>&1; then
+  systemctl restart comma.service || systemctl start comma.service || true
+  sleep 2
+  if systemctl is-active --quiet comma.service; then
+    exit 0
+  fi
+fi
 sudo -u comma bash -lc 'cd __DEVICE_PATH__ && nohup ./launch_openpilot.sh >/tmp/fork-switch-launch.log 2>&1 &'
 '@
 
   $deviceStartScript = $deviceStartScript.Replace("__DEVICE_PATH__", $DevicePath)
+  $deviceStartScript = $deviceStartScript.Replace("`r`n", "`n")
   Invoke-Adb -Arguments @("shell", "sh", "-c", $deviceStartScript) -TimeoutSeconds $AdbRestartTimeoutSeconds
 }
 
@@ -372,8 +428,47 @@ if (-not $AdbPath -or -not (Test-Path -LiteralPath $AdbPath)) {
   throw "ADB not found. Pass -AdbPath, run Fork_Manager.bat setup adb, or put adb.exe on PATH."
 }
 
+$adbSessionHelper = Join-Path (Split-Path -Parent (Split-Path -Parent $PSScriptRoot)) "scripts\adb_session.ps1"
+if (Test-Path -LiteralPath $adbSessionHelper) {
+  . $adbSessionHelper
+  # Shared adb_session.ps1 overwrites Invoke-Adb with a different signature that
+  # requires -AdbPath and returns a result object. Re-bind the deploy wrappers so
+  # the rest of this script keeps using Invoke-AdbProcess (push/shell/timeouts).
+  function Invoke-Adb {
+    param(
+      [Parameter(Mandatory = $true)]
+      [string[]]$Arguments,
+      [int]$TimeoutSeconds = $AdbCommandTimeoutSeconds
+    )
+
+    $result = Invoke-AdbProcess -Arguments $Arguments -TimeoutSeconds $TimeoutSeconds
+    if ($result.Stdout -and $result.Stdout.Trim()) {
+      Write-Host $result.Stdout.TrimEnd()
+    }
+    if ($result.Stderr -and $result.Stderr.Trim()) {
+      Write-Host $result.Stderr.TrimEnd()
+    }
+  }
+
+  function Get-AdbOutput {
+    param(
+      [Parameter(Mandatory = $true)]
+      [string[]]$Arguments,
+      [int]$TimeoutSeconds = $AdbCommandTimeoutSeconds
+    )
+
+    $result = Invoke-AdbProcess -Arguments $Arguments -TimeoutSeconds $TimeoutSeconds
+    return $result.Stdout.Trim()
+  }
+} else {
+  Write-Warning "Shared ADB session helper missing: $adbSessionHelper"
+}
+
 if ($CheckAdbOnly) {
   Write-Step "Checking adb connection"
+  if (Get-Command Ensure-AdbSession -ErrorAction SilentlyContinue) {
+    $null = Ensure-AdbSession -AdbPath $AdbPath -ProbeShell
+  }
   $devices = Get-AdbOutput -Arguments @("devices") -TimeoutSeconds $AdbProbeTimeoutSeconds
   $onlineDevices = @(
     $devices -split "\r?\n" |
@@ -400,6 +495,9 @@ if ($CheckAdbOnly) {
     Write-Warning "ADB is connected, but $DevicePath could not be inspected: $($_.Exception.Message)"
   }
 
+  if (Get-Command Finalize-AdbSession -ErrorAction SilentlyContinue) {
+    Finalize-AdbSession -AdbPath $AdbPath
+  }
   exit 0
 }
 
@@ -527,6 +625,11 @@ try {
   }
 
   Write-Step "Checking adb connection"
+  # Do not ProbeShell here: a false hung-shell probe would kill-server right before
+  # the multi-minute bundle push and brick the transfer.
+  if (Get-Command Ensure-AdbSession -ErrorAction SilentlyContinue) {
+    $null = Ensure-AdbSession -AdbPath $AdbPath
+  }
   $devices = Get-AdbOutput -Arguments @("devices") -TimeoutSeconds $AdbProbeTimeoutSeconds
   $onlineDevices = @(
     $devices -split "\r?\n" |
@@ -586,6 +689,13 @@ EOF
 chmod +x __CONTINUE_PATH__
 chown comma:comma __CONTINUE_PATH__
 chown -R comma:comma __DEVICE_PATH__
+
+# In-tree harden if present (source-shipped). Host deploy also runs the latest
+# host copy after this script so Fork Manager always applies current fixes.
+if [ -x __DEVICE_PATH__/scripts/starpilot_device_harden.sh ]; then
+  DEVICE_PATH=__DEVICE_PATH__ CLEAR_MSGQ=1 bash __DEVICE_PATH__/scripts/starpilot_device_harden.sh || true
+fi
+
 rm -f __DEVICE_BUNDLE_PATH__
 rm -f __DEVICE_SCRIPT_PATH__
 sync
@@ -615,6 +725,14 @@ sync
   $deviceCommitBeforeReboot = (Get-AdbOutput -Arguments @("shell", "git", "-c", $safeDirectory, "-C", $DevicePath, "rev-parse", "HEAD") -TimeoutSeconds $AdbProbeTimeoutSeconds).Trim()
   if ($deviceCommitBeforeReboot -ne $headCommit) {
     throw "Device install did not stage expected commit $headCommit before reboot. Device is still on $deviceCommitBeforeReboot."
+  }
+
+  # Always run host harden after install (capnp shared libs must be built on-device;
+  # +x bits / msgq clear / pandad SPI hang fix).
+  try {
+    Invoke-StarPilotDeviceHarden -ClearMsgq
+  } catch {
+    Write-Warning "StarPilot device harden failed: $($_.Exception.Message)"
   }
 
   if (-not $SkipReboot) {
@@ -667,5 +785,8 @@ screen appears if needed.
 } finally {
   if (-not $KeepBundle) {
     Remove-Item -LiteralPath $tempDir -Recurse -Force -ErrorAction SilentlyContinue
+  }
+  if (Get-Command Finalize-AdbSession -ErrorAction SilentlyContinue) {
+    Finalize-AdbSession -AdbPath $AdbPath
   }
 }

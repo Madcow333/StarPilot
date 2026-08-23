@@ -195,12 +195,6 @@ class Car:
     if prev_cp is not None:
       self.params.put("CarParamsPrevRoute", prev_cp)
 
-    # Write CarParams for controls and radard
-    cp_bytes = self.CP.to_bytes()
-    self.params.put("CarParams", cp_bytes)
-    self.params.put_nonblocking("CarParamsCache", cp_bytes)
-    self.params.put_nonblocking("CarParamsPersistent", cp_bytes)
-
     self.mock_carstate = MockCarState()
     self.v_cruise_helper = VCruiseHelper(self.CP, self.FPCP)
     self.redneck_cruise = RedneckCruise(self.CP, self.FPCP) if self.CP.brand in ("hyundai", "subaru") and \
@@ -230,6 +224,13 @@ class Car:
     if getattr(self.starpilot_toggles, "remap_cancel_to_distance", False):
       self.CP.alternativeExperience |= ALTERNATIVE_EXPERIENCE.GM_REMAP_CANCEL_TO_DISTANCE
       self.FPCP.alternativeExperience |= ALTERNATIVE_EXPERIENCE.GM_REMAP_CANCEL_TO_DISTANCE
+
+    # Write CarParams AFTER StarPilot alt-experience / safety flag merges so
+    # pandad + selfdrived see one consistent snapshot (avoids controlsMismatch).
+    cp_bytes = self.CP.to_bytes()
+    self.params.put("CarParams", cp_bytes)
+    self.params.put_nonblocking("CarParamsCache", cp_bytes)
+    self.params.put_nonblocking("CarParamsPersistent", cp_bytes)
 
     fpcp_bytes = self.FPCP.to_bytes()
     self.params.put("StarPilotCarParams", fpcp_bytes)
