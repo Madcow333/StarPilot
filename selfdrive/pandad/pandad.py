@@ -204,9 +204,9 @@ def main() -> None:
           cloudlog.event("panda.som_reset_triggered", health=health, serial=panda.get_usb_serial())
 
         if first_run:
-          # reset panda to ensure we're in a good state
-          cloudlog.info(f"Resetting panda {panda.get_usb_serial()}")
-          panda.reset(reconnect=True)
+          # Skip SPI reset on first run: on comma mici a blocking reset can hang
+          # and leave the UI on "system booting" / never spawn native pandad.
+          cloudlog.info(f"Skipping panda reset on first run {panda.get_usb_serial()} (mici/SPI stability)")
 
       for p in pandas:
         p.close()
@@ -224,13 +224,15 @@ def main() -> None:
 
     first_run = False
 
-    # run pandad with all connected serials as arguments
-    if get_remote_start_boots_comma(params) or get_hkg_remote_start_boots_comma(params) or get_ignore_ignition_line(params):
-      os.environ["BOARDD_SKIP_FW_CHECK"] = "1"
-    else:
-      os.environ.pop("BOARDD_SKIP_FW_CHECK", None)
+    # Always skip native FW re-check after Python flash_panda already validated
+    # signatures. Needed when running stock AGNOS with rebuilt capnp libs.
+    os.environ["BOARDD_SKIP_FW_CHECK"] = "1"
     os.environ['MANAGER_DAEMON'] = 'pandad'
-    process = subprocess.Popen(["./pandad", *panda_serials], cwd=os.path.join(BASEDIR, "selfdrive/pandad"))
+    process = subprocess.Popen(
+      ["./pandad", *panda_serials],
+      cwd=os.path.join(BASEDIR, "selfdrive/pandad"),
+      env=os.environ.copy(),
+    )
     process.wait()
 
 

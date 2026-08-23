@@ -235,7 +235,10 @@ PY
   fi
 
   sp_launch_timing "prebuilt_decision_done"
-  if [ "$USE_PREBUILT" = "1" ] && [ -f $DIR/prebuilt ] && ! prebuilt_runtime_compatible; then
+  # Skip prebuilt_runtime_compatible() on stock AGNOS: it imports
+  # pandad_api_impl.so (libcapnp-1.0.2) and forces a doomed scons rebuild loop
+  # (OOM / boot hang). Device harden ships shared libs + a prebuilt marker.
+  if false && [ "$USE_PREBUILT" = "1" ] && [ -f $DIR/prebuilt ] && ! prebuilt_runtime_compatible; then
     echo "Prebuilt runtime artifacts are incompatible on this device; rebuilding locally."
     USE_PREBUILT=0
   fi

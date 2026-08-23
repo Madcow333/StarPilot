@@ -585,9 +585,19 @@ class SelfdriveD:
     for i, pandaState in enumerate(self.sm['pandaStates']):
       # All pandas must match the list of safetyConfigs, and if outside this list, must be silent or noOutput
       if i < len(self.CP.safetyConfigs):
-        safety_mismatch = pandaState.safetyModel != self.CP.safetyConfigs[i].safetyModel or \
-                          pandaState.safetyParam != self.FPCP.safetyConfigs[i].safetyParam or \
-                          pandaState.alternativeExperience != self.FPCP.alternativeExperience
+        # pandad ORs CarParams.safetyParam with StarPilotCarParams.safetyParam (and ORs
+        # alternativeExperience). Compare against the same combined values, otherwise
+        # Always-On Lateral / StarPilot safety flags cause constant controlsMismatch
+        # ("TAKE CONTROL IMMEDIATELY" / Controls Mismatch) with no real fault.
+        expected_safety_param = int(self.CP.safetyConfigs[i].safetyParam)
+        if i < len(self.FPCP.safetyConfigs):
+          expected_safety_param |= int(self.FPCP.safetyConfigs[i].safetyParam)
+        expected_alt_exp = int(self.CP.alternativeExperience) | int(self.FPCP.alternativeExperience)
+        safety_mismatch = (
+          pandaState.safetyModel != self.CP.safetyConfigs[i].safetyModel or
+          int(pandaState.safetyParam) != expected_safety_param or
+          int(pandaState.alternativeExperience) != expected_alt_exp
+        )
       else:
         safety_mismatch = pandaState.safetyModel not in IGNORED_SAFETY_MODES
 
