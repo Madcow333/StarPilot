@@ -440,7 +440,7 @@ function Invoke-StarPilotDeviceHarden {
   Write-Step "Hardening StarPilot on device (capnp libs, +x bins, msgq, pandad)"
   Invoke-Adb -Arguments @("push", $hostHarden, $remoteHarden) -TimeoutSeconds $AdbPushTimeoutSeconds
   $clearFlag = if ($ClearMsgq) { "1" } else { "0" }
-  $cmd = "chmod +x $remoteHarden; DEVICE_PATH=$DevicePath CLEAR_MSGQ=$clearFlag bash $remoteHarden"
+  $cmd = "sed -i 's/\r$//' $remoteHarden; chmod +x $remoteHarden; DEVICE_PATH=$DevicePath CLEAR_MSGQ=$clearFlag bash $remoteHarden"
   Invoke-Adb -Arguments @("shell", $cmd) -TimeoutSeconds $AdbInstallTimeoutSeconds
 }
 
