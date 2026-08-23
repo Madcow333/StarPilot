@@ -3,6 +3,7 @@ import operator
 import platform
 import sys
 
+from importlib.util import find_spec
 from types import SimpleNamespace
 
 from cereal import car
@@ -13,6 +14,7 @@ from openpilot.system.manager.process import PythonProcess, NativeProcess, Daemo
 WEBCAM = os.getenv("USE_WEBCAM") is not None
 UI_WATCHDOG_MAX_DT = int(os.getenv("UI_WATCHDOG_MAX_DT", "10"))
 CAMERAD_WATCHDOG_MAX_DT = int(os.getenv("CAMERAD_WATCHDOG_MAX_DT", "5"))
+CV2_AVAILABLE = find_spec("cv2") is not None
 
 def driverview(started: bool, params: Params, CP: car.CarParams, starpilot_toggles: SimpleNamespace) -> bool:
   return started or params.get_bool("IsDriverViewEnabled")
@@ -190,8 +192,8 @@ procs += [
   PythonProcess("mapd", "starpilot.navigation.mapd_wrapper", always_run, nice=19),
   PythonProcess("navigationd", "starpilot.navigation.navigationd", run_navigationd, nice=19),
   PythonProcess("speed_limit_filler", "starpilot.system.speed_limit_filler", run_speed_limit_filler, nice=19),
-  PythonProcess("speed_limit_vision", "starpilot.system.speed_limit_vision", run_speed_limit_vision, nice=19),
-  PythonProcess("adj_spot_monitor_vision", "starpilot.system.adj_spot_monitor_vision", run_v_asm, nice=19),
+  PythonProcess("speed_limit_vision", "starpilot.system.speed_limit_vision", run_speed_limit_vision, enabled=CV2_AVAILABLE, nice=19),
+  PythonProcess("adj_spot_monitor_vision", "starpilot.system.adj_spot_monitor_vision", run_v_asm, enabled=CV2_AVAILABLE, nice=19),
 ]
 
 managed_processes = {p.name: p for p in procs}
