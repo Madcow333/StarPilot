@@ -205,6 +205,28 @@ function Get-DeviceFileSize {
   return $size
 }
 
+function Wait-ForDeviceFileSize {
+  param(
+    [Parameter(Mandatory = $true)]
+    [string]$RemotePath,
+    [Parameter(Mandatory = $true)]
+    [long]$ExpectedSize,
+    [int]$Attempts = 3
+  )
+
+  [long]$size = 0
+  for ($attempt = 1; $attempt -le $Attempts; $attempt += 1) {
+    $size = Get-DeviceFileSize -RemotePath $RemotePath
+    if ($size -eq $ExpectedSize) {
+      return $size
+    }
+    if ($attempt -lt $Attempts) {
+      Start-Sleep -Seconds 2
+    }
+  }
+  return $size
+}
+
 function Push-AdbFileChunked {
   param(
     [Parameter(Mandatory = $true)]
@@ -267,7 +289,9 @@ function Push-AdbFileChunked {
 
         Write-Host "Pushing chunk $($partIndex + 1) of $([Math]::Ceiling($file.Length / $chunkSize)) ($partLength bytes)"
         Invoke-Adb -Arguments @("push", $localPartPath, $remotePartPath) -TimeoutSeconds $AdbChunkTimeoutSeconds
-        $remotePartLength = Get-DeviceFileSize -RemotePath $remotePartPath
+        # Some comma devices leave the first shell after a large push stale. The
+        # shared ADB helper resets that session; retry against the recovered daemon.
+        $remotePartLength = Wait-ForDeviceFileSize -RemotePath $remotePartPath -ExpectedSize $partLength
         if ($remotePartLength -ne $partLength) {
           throw "Device chunk $partName has $remotePartLength bytes; expected $partLength"
         }
@@ -284,7 +308,7 @@ function Push-AdbFileChunked {
   Write-Host "Reassembling $partIndex verified chunks on the device"
   $assembleCommand = "rm -f '$RemotePath' && cat '$remotePartsPath'/part-* > '$RemotePath'"
   Invoke-Adb -Arguments @("shell", "sh", "-c", $assembleCommand) -TimeoutSeconds $AdbPushTimeoutSeconds
-  $remoteLength = Get-DeviceFileSize -RemotePath $RemotePath
+  $remoteLength = Wait-ForDeviceFileSize -RemotePath $RemotePath -ExpectedSize $file.Length
   if ($remoteLength -ne $file.Length) {
     throw "Reassembled device file has $remoteLength bytes; expected $($file.Length)"
   }
