@@ -555,7 +555,12 @@ if (-not $AdbPath -or -not (Test-Path -LiteralPath $AdbPath)) {
   throw "ADB not found. Pass -AdbPath, run Fork_Manager.bat setup adb, or put adb.exe on PATH."
 }
 
-$adbSessionHelper = Join-Path (Split-Path -Parent (Split-Path -Parent $PSScriptRoot)) "scripts\adb_session.ps1"
+$forkManagerScripts = Join-Path (Split-Path -Parent (Split-Path -Parent $PSScriptRoot)) "scripts"
+$adbSessionHelper = Join-Path $forkManagerScripts "adb_session.ps1"
+$blobHooks = Join-Path $forkManagerScripts "device_blob_hooks.ps1"
+if (Test-Path -LiteralPath $blobHooks) {
+  . $blobHooks
+}
 if (Test-Path -LiteralPath $adbSessionHelper) {
   . $adbSessionHelper
   # Shared adb_session.ps1 overwrites Invoke-Adb with a different signature that
@@ -736,6 +741,9 @@ $tmpPath = "/data/tmppilot"
 New-Item -ItemType Directory -Path $tempDir -Force | Out-Null
 
 try {
+  if (Get-Command Invoke-ForkManagerHostBlobFetch -ErrorAction SilentlyContinue) {
+    Invoke-ForkManagerHostBlobFetch -RepoPath (Get-Location).Path
+  }
   Write-Step "Creating local git bundle"
   Invoke-Git -Arguments @("bundle", "create", $bundlePath, $sourceRef)
 
@@ -788,6 +796,11 @@ if [ -d __DEVICE_PATH__ ]; then
   mv __DEVICE_PATH__ __BACKUP_PATH__
 fi
 mv __TMP_PATH__ __DEVICE_PATH__
+
+# Fork Manager: drop .gitignore and fetch proprietary runtime blobs.
+if [ -f /data/fetch_device_blobs.sh ]; then
+  DEVICE_PATH=__DEVICE_PATH__ sh /data/fetch_device_blobs.sh
+fi
 
 # Align AGNOS startup gate with the OS already on this comma.
 if [ -r /VERSION ]; then
@@ -877,6 +890,9 @@ sync
   [System.IO.File]::WriteAllText($localInstallScriptPath, $deviceInstallScript, [System.Text.UTF8Encoding]::new($false))
 
   Write-Step "Pushing bundle and install script over adb"
+  if (Get-Command Get-ForkManagerDeviceBlobFetchScript -ErrorAction SilentlyContinue) {
+    Invoke-Adb -Arguments @("push", (Get-ForkManagerDeviceBlobFetchScript), "/data/fetch_device_blobs.sh") -TimeoutSeconds $AdbPushTimeoutSeconds
+  }
   Push-AdbFileChunked -LocalPath $bundlePath -RemotePath $DeviceBundlePath -ResumeKey $headCommitShort
   Invoke-Adb -Arguments @("push", $localInstallScriptPath, $DeviceScriptPath) -TimeoutSeconds $AdbPushTimeoutSeconds
 
