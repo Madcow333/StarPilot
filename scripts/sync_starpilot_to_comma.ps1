@@ -475,28 +475,15 @@ sudo -u comma bash -lc 'cd __DEVICE_PATH__ && nohup ./launch_openpilot.sh >/tmp/
 }
 
 function Wait-ForSoftwareReady {
-  param([int]$TimeoutSeconds = 120)
+  param([int]$TimeoutSeconds = 180, [int]$HoldSeconds = 60)
 
-  $deadline = (Get-Date).AddSeconds($TimeoutSeconds)
-  while ((Get-Date) -lt $deadline) {
-    Start-Sleep -Seconds 5
-
-    try {
-      $procSummary = Get-AdbOutput -Arguments @("shell", "pgrep -af 'manager.py|build.py|spinner.py|text.py|selfdrive.ui.ui|selfdrive.pandad.pandad|./pandad' || true") -TimeoutSeconds $AdbProbeTimeoutSeconds
-    } catch {
-      continue
-    }
-
-    if ($procSummary -match 'manager\.py|build\.py|spinner\.py|selfdrive\.ui\.ui|selfdrive\.pandad\.pandad|\.\/pandad') {
-      return $true
-    }
-
-    if ($procSummary -match 'text\.py') {
-      return $false
-    }
-  }
-
-  return $false
+  return Wait-ForkManagerSustainedHealth -GetProcessList {
+    Get-AdbOutput -Arguments @("shell", "pgrep -af 'manager.py|selfdrive.ui.ui|selfdrive.pandad.pandad|./pandad' || true") -TimeoutSeconds $AdbProbeTimeoutSeconds
+  } -Patterns @{
+    manager = "manager\.py"
+    ui = "selfdrive\.ui\.ui"
+    pandad = "pandad"
+  } -ErrorPattern "text\.py" -StartupTimeoutSeconds $TimeoutSeconds -HoldSeconds $HoldSeconds
 }
 
 function Get-DevicePandaCounts {
@@ -558,9 +545,11 @@ if (-not $AdbPath -or -not (Test-Path -LiteralPath $AdbPath)) {
 $forkManagerScripts = Join-Path (Split-Path -Parent (Split-Path -Parent $PSScriptRoot)) "scripts"
 $adbSessionHelper = Join-Path $forkManagerScripts "adb_session.ps1"
 $blobHooks = Join-Path $forkManagerScripts "device_blob_hooks.ps1"
-if (Test-Path -LiteralPath $blobHooks) {
-  . $blobHooks
+if (-not (Test-Path -LiteralPath $blobHooks)) {
+  throw "Required Fork Manager helper is missing: $blobHooks"
 }
+. $blobHooks
+Assert-ForkManagerHelpersPresent
 if (Test-Path -LiteralPath $adbSessionHelper) {
   . $adbSessionHelper
   # Shared adb_session.ps1 overwrites Invoke-Adb with a different signature that
@@ -740,12 +729,12 @@ $tmpPath = "/data/tmppilot"
 
 New-Item -ItemType Directory -Path $tempDir -Force | Out-Null
 
+$payloadDir = Join-Path $tempDir "payload"
+$DevicePayload = "/data/fork-manager-payload"
+$stagingPath = "/data/fork-manager-staging"
 try {
-  if (Get-Command Invoke-ForkManagerHostBlobFetch -ErrorAction SilentlyContinue) {
-    Invoke-ForkManagerHostBlobFetch -RepoPath (Get-Location).Path
-  }
-  Write-Step "Creating local git bundle"
-  Invoke-Git -Arguments @("bundle", "create", $bundlePath, $sourceRef)
+  Invoke-ForkManagerPreparePayload -ForkKey "starpilot" -RepoPath (Get-Location).Path -Ref $headCommit -OutputDir $payloadDir
+  $bundlePath = Join-Path $payloadDir "source.bundle"
 
   if ($SkipDeviceInstall) {
     Write-Step "Skipping device install"
@@ -774,164 +763,53 @@ try {
     throw "No adb device detected"
   }
 
-  $deviceInstallScript = @'
-set -e
+  $isOffroad = (Get-AdbOutput -Arguments @("exec-out", "cat", "/data/params/d/IsOffroad") -TimeoutSeconds $AdbProbeTimeoutSeconds).Trim()
+  if ($isOffroad -ne "1") { throw "Turn the vehicle ignition fully off before installing. IsOffroad=$isOffroad." }
+  $installedAgnosVersion = (Get-AdbOutput -Arguments @("shell", "cat", "/VERSION") -TimeoutSeconds $AdbProbeTimeoutSeconds).Trim()
+  $hardware = (Get-AdbOutput -Arguments @("shell", "cat", "/sys/firmware/devicetree/base/model") -TimeoutSeconds $AdbProbeTimeoutSeconds).Trim().ToLower()
+  $hardware = ($hardware -replace "comma\s+", "").Trim()
+  Invoke-ForkManagerCheckCombo -ForkKey "starpilot" -Hardware $hardware -Agnos $installedAgnosVersion
 
-pkill -9 -f 'launch_chffrplus.sh|system/manager/manager.py|./manager.py|system.updated.updated|selfdrive.pandad.pandad|./pandad|selfdrive.ui.ui|system/ui/text.py|starpilot\.' || true
+  Write-Step "Pushing verified payload and shared install helpers"
+  Invoke-Adb -Arguments @("shell", "mkdir", "-p", $DevicePayload) -TimeoutSeconds $AdbProbeTimeoutSeconds
+  Invoke-Adb -Arguments @("push", (Get-ForkManagerDeviceHelperPath -Name "device_install_common.sh"), "/data/device_install_common.sh") -TimeoutSeconds $AdbPushTimeoutSeconds
+  Invoke-Adb -Arguments @("push", (Get-ForkManagerDeviceHelperPath -Name "device_install_agnos_sync.sh"), "/data/device_install_agnos_sync.sh") -TimeoutSeconds $AdbPushTimeoutSeconds
+  Invoke-Adb -Arguments @("push", (Get-ForkManagerDeviceHelperPath -Name "fetch_device_blobs.sh"), "/data/fetch_device_blobs.sh") -TimeoutSeconds $AdbPushTimeoutSeconds
+  Invoke-Adb -Arguments @("push", (Join-Path $payloadDir "source.bundle"), "$DevicePayload/source.bundle") -TimeoutSeconds $AdbPushTimeoutSeconds
+  Invoke-Adb -Arguments @("push", (Join-Path $payloadDir "artifacts.tar"), "$DevicePayload/artifacts.tar") -TimeoutSeconds $AdbPushTimeoutSeconds
+  Invoke-Adb -Arguments @("push", (Join-Path $payloadDir "install_manifest.json"), "$DevicePayload/install_manifest.json") -TimeoutSeconds $AdbPushTimeoutSeconds
 
-if grep -q ' /data/safe_staging/merged ' /proc/mounts 2>/dev/null; then
-  umount -l /data/safe_staging/merged || true
-fi
+  $envPrefix = "FORK_KEY=starpilot DEVICE_PATH=$DevicePath BACKUP_PATH=$BackupPath STAGING_PATH=$stagingPath CONTINUE_PATH=$ContinuePath BUNDLE_PATH=$DevicePayload/source.bundle ARTIFACTS_TAR=$DevicePayload/artifacts.tar MANIFEST_PATH=$DevicePayload/install_manifest.json INSTALLER_BRANCH=$InstallerBranch"
+  Write-Step "Staging payload without disrupting the live installation"
+  Invoke-Adb -Arguments @("shell", "sh", "-c", "$envPrefix sh /data/device_install_common.sh stage") -TimeoutSeconds $AdbInstallTimeoutSeconds
+  $isOffroad = (Get-AdbOutput -Arguments @("exec-out", "cat", "/data/params/d/IsOffroad") -TimeoutSeconds $AdbProbeTimeoutSeconds).Trim()
+  if ($isOffroad -ne "1") { throw "Vehicle is no longer offroad; activation blocked." }
 
-rm -rf /data/safe_staging
-rm -f /tmp/safe_staging_overlay.lock
-
-rm -rf __TMP_PATH__
-git clone -b __BUNDLE_BRANCH__ __DEVICE_BUNDLE_PATH__ __TMP_PATH__
-git -C __TMP_PATH__ branch -M __INSTALLER_BRANCH__
-git -C __TMP_PATH__ remote set-url origin __INSTALLER_REPO__
-
-rm -rf __BACKUP_PATH__
-if [ -d __DEVICE_PATH__ ]; then
-  mv __DEVICE_PATH__ __BACKUP_PATH__
-fi
-mv __TMP_PATH__ __DEVICE_PATH__
-
-# Fork Manager: drop .gitignore and fetch proprietary runtime blobs.
-if [ -f /data/fetch_device_blobs.sh ]; then
-  DEVICE_PATH=__DEVICE_PATH__ sh /data/fetch_device_blobs.sh
-fi
-
-# Align AGNOS startup gate with the OS already on this comma.
-if [ -r /VERSION ]; then
-  device_agnos="$(tr -d '\n\r' < /VERSION)"
-  for launch_env in __DEVICE_PATH__/launch_env.sh __DEVICE_PATH__/sunnypilot/system/hardware/c3/launch_env.sh; do
-    [ -f "$launch_env" ] || continue
-    if grep -q 'export AGNOS_VERSION=' "$launch_env"; then
-      sed -i "s/export AGNOS_VERSION=\"[^\"]*\"/export AGNOS_VERSION=\"${device_agnos}\"/" "$launch_env"
-    fi
-  done
-fi
-
-params_dir=/data/params/d
-mkdir -p "$params_dir"
-now="$(date -u '+%Y-%m-%dT%H:%M:%S')"
-last_uptime_onroad="$(cat "$params_dir/UptimeOnroad" 2>/dev/null || printf '0.0')"
-last_route_count="$(cat "$params_dir/RouteCount" 2>/dev/null || printf '0')"
-
-# Fork Manager owns updates for this install; keep startup independent of an
-# internet check and record this local deployment as the current update.
-printf '%s' '__INSTALLER_BRANCH__' > "$params_dir/UpdaterTargetBranch"
-printf '%s' '1' > "$params_dir/DisableUpdates"
-printf '%s' "$now" > "$params_dir/LastUpdateTime"
-printf '%s' "$now" > "$params_dir/UpdaterLastFetchTime"
-printf '%s' "$last_uptime_onroad" > "$params_dir/LastUpdateUptimeOnroad"
-printf '%s' "$last_route_count" > "$params_dir/LastUpdateRouteCount"
-printf '%s' '0' > "$params_dir/UpdateFailedCount"
-printf '%s' 'idle' > "$params_dir/UpdaterState"
-
-rm -f \
-  "$params_dir/UpdateAvailable" \
-  "$params_dir/Updated" \
-  "$params_dir/UpdaterAvailableBranches" \
-  "$params_dir/UpdaterCurrentDescription" \
-  "$params_dir/UpdaterCurrentReleaseNotes" \
-  "$params_dir/UpdaterFetchAvailable" \
-  "$params_dir/UpdaterNewDescription" \
-  "$params_dir/UpdaterNewReleaseNotes" \
-  "$params_dir/LastUpdateException" \
-  "$params_dir/Offroad_ConnectivityNeeded" \
-  "$params_dir/Offroad_ConnectivityNeededPrompt" \
-  "$params_dir/Offroad_UpdateFailed"
-
-chown comma:comma \
-  "$params_dir/UpdaterTargetBranch" \
-  "$params_dir/DisableUpdates" \
-  "$params_dir/LastUpdateTime" \
-  "$params_dir/UpdaterLastFetchTime" \
-  "$params_dir/LastUpdateUptimeOnroad" \
-  "$params_dir/LastUpdateRouteCount" \
-  "$params_dir/UpdateFailedCount" \
-  "$params_dir/UpdaterState" 2>/dev/null || true
-
-cat >__CONTINUE_PATH__ <<'EOF'
-#!/usr/bin/env bash
-
-cd __DEVICE_PATH__
-exec ./launch_openpilot.sh
-EOF
-
-chmod +x __CONTINUE_PATH__
-chown comma:comma __CONTINUE_PATH__
-chown -R comma:comma __DEVICE_PATH__
-
-# In-tree harden if present (source-shipped). Host deploy also runs the latest
-# host copy after this script so Fork Manager always applies current fixes.
-if [ -x __DEVICE_PATH__/scripts/starpilot_device_harden.sh ]; then
-  DEVICE_PATH=__DEVICE_PATH__ CLEAR_MSGQ=1 bash __DEVICE_PATH__/scripts/starpilot_device_harden.sh || true
-fi
-
-rm -f __DEVICE_BUNDLE_PATH__
-rm -f __DEVICE_SCRIPT_PATH__
-sync
-'@
-
-  $deviceInstallScript = $deviceInstallScript.Replace("__TMP_PATH__", $tmpPath)
-  $deviceInstallScript = $deviceInstallScript.Replace("__BUNDLE_BRANCH__", $bundleSourceBranch)
-  $deviceInstallScript = $deviceInstallScript.Replace("__DEVICE_BUNDLE_PATH__", $DeviceBundlePath)
-  $deviceInstallScript = $deviceInstallScript.Replace("__INSTALLER_BRANCH__", $InstallerBranch)
-  $deviceInstallScript = $deviceInstallScript.Replace("__INSTALLER_REPO__", $InstallerRepo)
-  $deviceInstallScript = $deviceInstallScript.Replace("__BACKUP_PATH__", $BackupPath)
-  $deviceInstallScript = $deviceInstallScript.Replace("__DEVICE_PATH__", $DevicePath)
-  $deviceInstallScript = $deviceInstallScript.Replace("__CONTINUE_PATH__", $ContinuePath)
-  $deviceInstallScript = $deviceInstallScript.Replace("__DEVICE_SCRIPT_PATH__", $DeviceScriptPath)
-
-  $deviceInstallScript = $deviceInstallScript.Replace("`r`n", "`n")
-  [System.IO.File]::WriteAllText($localInstallScriptPath, $deviceInstallScript, [System.Text.UTF8Encoding]::new($false))
-
-  Write-Step "Pushing bundle and install script over adb"
-  if (Get-Command Get-ForkManagerDeviceBlobFetchScript -ErrorAction SilentlyContinue) {
-    Invoke-Adb -Arguments @("push", (Get-ForkManagerDeviceBlobFetchScript), "/data/fetch_device_blobs.sh") -TimeoutSeconds $AdbPushTimeoutSeconds
-  }
-  Push-AdbFileChunked -LocalPath $bundlePath -RemotePath $DeviceBundlePath -ResumeKey $headCommitShort
-  Invoke-Adb -Arguments @("push", $localInstallScriptPath, $DeviceScriptPath) -TimeoutSeconds $AdbPushTimeoutSeconds
-
-  Write-Step "Installing committed local repo to the device"
-  Invoke-Adb -Arguments @("shell", "sh", $DeviceScriptPath) -TimeoutSeconds $AdbInstallTimeoutSeconds
-
+  $installStatus = "staged"
   $safeDirectory = "safe.directory=$DevicePath"
-  $deviceCommitBeforeReboot = (Get-AdbOutput -Arguments @("shell", "git", "-c", $safeDirectory, "-C", $DevicePath, "rev-parse", "HEAD") -TimeoutSeconds $AdbProbeTimeoutSeconds).Trim()
-  if ($deviceCommitBeforeReboot -ne $headCommit) {
-    throw "Device install did not stage expected commit $headCommit before reboot. Device is still on $deviceCommitBeforeReboot."
-  }
-
-  # Always run host harden after install (capnp shared libs must be built on-device;
-  # +x bits / msgq clear / pandad SPI hang fix).
   try {
-    Invoke-StarPilotDeviceHarden -ClearMsgq
-  } catch {
-    Write-Warning "StarPilot device harden failed: $($_.Exception.Message)"
-  }
-
-  if (-not $SkipReboot) {
-    Write-Step "Restarting software and waiting for it to start"
-    $softwareRestarted = $false
-    try {
+    Write-Step "Activating staged installation"
+    Invoke-Adb -Arguments @("shell", "sh", "-c", "$envPrefix sh /data/device_install_common.sh activate") -TimeoutSeconds $AdbInstallTimeoutSeconds
+    $installStatus = "activated"
+    $got = (Get-AdbOutput -Arguments @("shell", "git", "-c", $safeDirectory, "-C", $DevicePath, "rev-parse", "HEAD") -TimeoutSeconds $AdbProbeTimeoutSeconds).Trim()
+    if ($got -ne $headCommit) { throw "Device commit $got != $headCommit" }
+    try { Invoke-StarPilotDeviceHarden -ClearMsgq } catch { throw "StarPilot device harden failed: $($_.Exception.Message)" }
+    if ($SkipReboot) {
+      Write-Host "Status: staged; runtime unverified (SkipReboot)."
+      $installStatus = "staged; runtime unverified"
+    } else {
       Start-InstalledSoftware
-      $softwareRestarted = Wait-ForSoftwareReady
-    } catch {
-      Write-Warning "Soft restart failed, falling back to a full reboot."
+      if (-not (Wait-ForSoftwareReady)) { throw "StarPilot failed sustained offroad health." }
+      $installStatus = "healthy"
     }
-
-    if (-not $softwareRestarted) {
-      Write-Step "Falling back to full device reboot"
-      Request-DeviceReboot
-      Wait-ForDeviceReady
-    }
-  } else {
-    Write-Step "Skipping reboot"
+  } catch {
+    Write-Warning "Activation/health failed; rolling back. $($_.Exception.Message)"
+    try {
+      Invoke-Adb -Arguments @("shell", "sh", "-c", "$envPrefix sh /data/device_install_common.sh rollback") -TimeoutSeconds $AdbInstallTimeoutSeconds
+      $installStatus = "rolled back"
+    } catch { $installStatus = "recovery required" }
+    throw "Install did not complete ($installStatus). $($_.Exception.Message)"
   }
-
   Write-Step "Verifying deployed branch"
   $deviceBranch = (Get-AdbOutput -Arguments @("shell", "git", "-c", $safeDirectory, "-C", $DevicePath, "branch", "--show-current") -TimeoutSeconds $AdbProbeTimeoutSeconds).Trim()
   $deviceCommit = (Get-AdbOutput -Arguments @("shell", "git", "-c", $safeDirectory, "-C", $DevicePath, "rev-parse", "--short", "HEAD") -TimeoutSeconds $AdbProbeTimeoutSeconds).Trim()
