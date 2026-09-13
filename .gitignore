@@ -134,3 +134,13 @@ Pipfile
 !rednose_repo/rednose/helpers/ekf_sym_pyx.so
 !panda/board/obj/
 !panda/board/obj/**
+
+# BEGIN FORK-MANAGER-RUNTIME-BLOBS
+# Keep comma runtime blobs trackable. Upstream gitignores *.pkl / *.so, which
+# hides proprietary binary artifacts (models and native prebuilts) from git add.
+# Fork Manager un-ignores those paths and fetches them during install.
+!**/selfdrive/modeld/models/*.pkl
+!**/selfdrive/modeld/models/*.pkl*
+!**/selfdrive/modeld/models/*.onnx
+!**/selfdrive/modeld/firmware/**
+# END FORK-MANAGER-RUNTIME-BLOBS
