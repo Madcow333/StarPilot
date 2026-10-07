@@ -520,6 +520,48 @@ print(f"{len(Panda.list())},{len(PandaDFU.list())}")
   }
 }
 
+function Get-ManagedUpdateParamScript {
+  return @'
+set -e
+params_dir=/data/params/d
+mkdir -p "$params_dir"
+now="$(date -u '+%Y-%m-%dT%H:%M:%S')"
+last_uptime_onroad="$(cat "$params_dir/UptimeOnroad" 2>/dev/null || printf '0.0')"
+last_route_count="$(cat "$params_dir/RouteCount" 2>/dev/null || printf '0')"
+printf '%s' '1' > "$params_dir/DisableUpdates"
+printf '%s' "$now" > "$params_dir/LastUpdateTime"
+printf '%s' "$now" > "$params_dir/UpdaterLastFetchTime"
+printf '%s' "$last_uptime_onroad" > "$params_dir/LastUpdateUptimeOnroad"
+printf '%s' "$last_route_count" > "$params_dir/LastUpdateRouteCount"
+printf '%s' '0' > "$params_dir/UpdateFailedCount"
+printf '%s' 'idle' > "$params_dir/UpdaterState"
+rm -f \
+  "$params_dir/Offroad_ConnectivityNeeded" \
+  "$params_dir/Offroad_ConnectivityNeededPrompt" \
+  "$params_dir/Offroad_UpdateFailed" \
+  "$params_dir/LastUpdateException"
+chown comma:comma "$params_dir/DisableUpdates" "$params_dir/LastUpdateTime" \
+  "$params_dir/UpdaterLastFetchTime" "$params_dir/LastUpdateUptimeOnroad" \
+  "$params_dir/LastUpdateRouteCount" "$params_dir/UpdateFailedCount" \
+  "$params_dir/UpdaterState" 2>/dev/null || true
+'@
+}
+
+function Invoke-DeviceShellScript {
+  param(
+    [Parameter(Mandatory = $true)][string]$ScriptText,
+    [string]$RemotePath = "/data/fork-manager-device-script.sh"
+  )
+  $localPath = Join-Path ([IO.Path]::GetTempPath()) ("fork-manager-device-script-" + [guid]::NewGuid().ToString("N") + ".sh")
+  try {
+    [IO.File]::WriteAllText($localPath, $ScriptText.Replace("`r`n", "`n"), [Text.UTF8Encoding]::new($false))
+    Invoke-Adb -Arguments @("push", $localPath, $RemotePath) -TimeoutSeconds $AdbPushTimeoutSeconds
+    Invoke-Adb -Arguments @("shell", "sh", $RemotePath) -TimeoutSeconds $AdbInstallTimeoutSeconds
+  } finally {
+    Remove-Item -LiteralPath $localPath -Force -ErrorAction SilentlyContinue
+  }
+}
+
 if (-not $AdbPath -or -not (Test-Path -LiteralPath $AdbPath)) {
   $adbCandidates = @(
     (Join-Path (Split-Path -Parent (Split-Path -Parent $PSScriptRoot)) "tools\platform-tools\adb.exe"),
@@ -775,8 +817,8 @@ try {
   Invoke-Adb -Arguments @("push", (Get-ForkManagerDeviceHelperPath -Name "device_install_common.sh"), "/data/device_install_common.sh") -TimeoutSeconds $AdbPushTimeoutSeconds
   Invoke-Adb -Arguments @("push", (Get-ForkManagerDeviceHelperPath -Name "device_install_agnos_sync.sh"), "/data/device_install_agnos_sync.sh") -TimeoutSeconds $AdbPushTimeoutSeconds
   Invoke-Adb -Arguments @("push", (Get-ForkManagerDeviceHelperPath -Name "fetch_device_blobs.sh"), "/data/fetch_device_blobs.sh") -TimeoutSeconds $AdbPushTimeoutSeconds
-  Invoke-Adb -Arguments @("push", (Join-Path $payloadDir "source.bundle"), "$DevicePayload/source.bundle") -TimeoutSeconds $AdbPushTimeoutSeconds
-  Invoke-Adb -Arguments @("push", (Join-Path $payloadDir "artifacts.tar"), "$DevicePayload/artifacts.tar") -TimeoutSeconds $AdbPushTimeoutSeconds
+  Push-AdbFileChunked -LocalPath $bundlePath -RemotePath "$DevicePayload/source.bundle" -ResumeKey "$headCommitShort-source"
+  Push-AdbFileChunked -LocalPath (Join-Path $payloadDir "artifacts.tar") -RemotePath "$DevicePayload/artifacts.tar" -ResumeKey "$headCommitShort-artifacts"
   Invoke-Adb -Arguments @("push", (Join-Path $payloadDir "install_manifest.json"), "$DevicePayload/install_manifest.json") -TimeoutSeconds $AdbPushTimeoutSeconds
 
   $deviceInstallCommand = @("shell", "env") + @(
@@ -804,6 +846,7 @@ try {
     $got = (Get-AdbOutput -Arguments @("shell", "git", "-c", $safeDirectory, "-C", $DevicePath, "rev-parse", "HEAD") -TimeoutSeconds $AdbProbeTimeoutSeconds).Trim()
     if ($got -ne $headCommit) { throw "Device commit $got != $headCommit" }
     try { Invoke-StarPilotDeviceHarden -ClearMsgq } catch { throw "StarPilot device harden failed: $($_.Exception.Message)" }
+    Invoke-DeviceShellScript -ScriptText (Get-ManagedUpdateParamScript) -RemotePath "/data/fork-manager-clear-update-gate.sh"
     if ($SkipReboot) {
       Write-Host "Status: staged; runtime unverified (SkipReboot)."
       $installStatus = "staged; runtime unverified"
